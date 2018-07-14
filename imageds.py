@@ -1,7 +1,7 @@
 from numpy import ascontiguousarray
 from numpy import split, frombuffer, expand_dims
 from numpy import *
-import cv2
+#import cv2
 import sys
 import os
 from ctypes import *
@@ -10,7 +10,7 @@ from ctypes.util import find_library
 imageds_dll = CDLL("/home/vagrant/imageds/build/src/libimageds.so", mode=1)
 sys.settrace
 
-class imageds_attr_array_t(Structure):
+class imageds_array_t(Structure):
 	_fields_ = [("name", c_char_p),("num_attributes", c_int),("attribute_names", POINTER(c_char_p)),("atrribute_types", POINTER(c_int)),("compression", POINTER(c_int))]
 
 class imageds_region_t(Structure):
@@ -79,7 +79,7 @@ def read_image(handle, region, attr_array):
 	#sys.exit()
 	#return imageds_array_to_np_array(ret_buffer, attr_array.contents.num_attributes)
 
-def create_attr_array(name, num_attributes, attribute_names, attribute_types, compression):
+def create_imageds_array(name, num_attributes, attribute_names, attribute_types, compression):
 	c_name = c_char_p(name)
 	c_num_attributes = c_int(num_attributes)
 	c_attribute_names = (c_char_p * len(attribute_names))(*attribute_names)
@@ -92,7 +92,7 @@ def create_attr_array(name, num_attributes, attribute_names, attribute_types, co
 	else:
 		c_compression = c_void_p()
 
-	return pointer(imageds_attr_array_t(c_name, c_num_attributes, c_attribute_names, c_attribute_types, c_compression))
+	return pointer(imageds_array_t(c_name, c_num_attributes, c_attribute_names, c_attribute_types, c_compression))
 
 def create_imageds_region(num_dimensions, dimension_name, start, end):
 	c_num_dimensions = c_int(num_dimensions)
@@ -137,8 +137,8 @@ def np_array_to_imageds_buffers(np_array):
 		#i = i.ravel()
 		print ("i:  ", i)
 		print (i.strides)
-		#data_array = ascontiguousarray(i, dtype=uint8)
-		data_ptr = i.ctypes.data_as(c_void_p)
+		data_array = ascontiguousarray(i, dtype=uint8)
+		data_ptr = data_array.ctypes.data_as(c_void_p)
 		buffers.append(create_imageds_buffer(data_ptr, np_array.ctypes.shape[0]*np_array.ctypes.shape[1]))
 	return buffers
 
@@ -194,22 +194,24 @@ if len(sys.argv) != 2:
 	sys.exit()
 filename = sys.argv[1]
 #print filename
-im = cv2.imread(filename)
+#im = cv2.imread(filename)
 #cv2.imshow("tmp", im)
-print (im)
+#print (im)
 sys.stderr = sys.stdout
 x = connect()
 region = create_imageds_region(2, [b"Row", b"Column"], [0, 0], [4, 4])
-attr_array = create_attr_array(b"TestImage2", 3, [b"B", b"G", b"R"], [4, 4, 4], [0, 0, 0])
-load_rc = load_image(x, region, attr_array, im)
-print ("load rc:", load_rc)
+attr_array = create_imageds_array(b"TestImage", 3, [b"B", b"G", b"R"], [4, 4, 4], [0, 0, 0])
+#load_rc = load_image(x, region, attr_array, im)
+#print ("load rc:", load_rc)
 #retrieved_image = read_image(x, region, attr_array)
 
 class MyWrapper(object):
 	def __init__(self, rows, cols, x, region, attr_array):
-		self.size = rows.value * cols.value
+		#self.size = rows.value * cols.value
+		self.size = c_size_t()
 		#self.size = 100 * 100
-		self.ret_buffer = POINTER(c_void_p)()
+		#self.ret_buffer = POINTER(c_void_p)()
+		self.ret_buffer = POINTER(POINTER(None))()
 		self.handle = connect()
 		self.region = region
 		#self.region = create_imageds_region(2, [b"Row", b"Column"], [0, 0], [5, 5])
@@ -218,18 +220,19 @@ class MyWrapper(object):
 	
 	@property
 	def buffer(self):
-		imageds_dll.imageds_read_array(self.handle, self.region, self.attr_array, byref(self.ret_buffer))
+		imageds_dll.imageds_read_array(self.handle, None, self.attr_array, byref(self.ret_buffer), pointer(self.size))
 		#imageds_dll.test_1(byref(self.ret_buffer), 50, 3)
 		print (self.ret_buffer[0])
 		print (self.ret_buffer[1])
+		print (self.size.value)
 
-		buf1 = (c_uint8 * (self.size)).from_address(self.ret_buffer[0])
-		buf2 = (c_uint8 * (self.size)).from_address(self.ret_buffer[1])
-		buf3 = (c_uint8 * (self.size)).from_address(self.ret_buffer[2])
+		buf1 = (c_uint8 * (self.size.value)).from_address(self.ret_buffer[0])
+		buf2 = (c_uint8 * (self.size.value)).from_address(self.ret_buffer[1])
+		buf3 = (c_uint8 * (self.size.value)).from_address(self.ret_buffer[2])
 		buf1._wrapper = self
 		buf2._wrapper = self
 		buf3._wrapper = self
-		print (self.ret_buffer[0])
+		print ("sdfs", self.ret_buffer[0])
 		arr1 = ctypeslib.as_array(buf1)
 		arr2 = ctypeslib.as_array(buf2)
 		arr3 = ctypeslib.as_array(buf3)
@@ -238,30 +241,36 @@ class MyWrapper(object):
 
 ret_buffer = POINTER(c_void_p)()
 #rc = imageds_dll.test_1(pointer(ret_buffer), 50, 3);
-imageds_dll.imageds_read_array(x, region, attr_array, byref(ret_buffer))
+size = c_size_t()
+imageds_dll.imageds_read_array(x, region, attr_array, byref(ret_buffer), byref(size))
+
 print (ret_buffer[0])
-print (ret_buffer[1])
-print (ret_buffer[2])
-print (ret_buffer[0])
-print (addressof(ret_buffer.contents))
-y = ret_buffer[1]
-print (ctypeslib.as_array((c_uint8 * 400).from_address(y)))
-x = ret_buffer[0]
-print (ctypeslib.as_array((c_uint8 * 25).from_address(x)))
-z = ret_buffer[2]
-print (ctypeslib.as_array((c_uint8 * 100).from_address(z)))
+print (size.value)
+#print (ret_buffer[1])
+#print (ret_buffer[2])
+#print (ret_buffer[0])
+#print (addressof(ret_buffer.contents))
+#y = ret_buffer[1]
+#contents = ctypeslib.as_array((c_uint8 * 400).from_address(ret_buffer[1]))
+#for i in contents:
+#	print (i)
+#x = ret_buffer[0]
+#print (x)
+#print (ctypeslib.as_array((c_uint8 * 400).from_address(x)))
+#z = ret_buffer[2]
+#print (ctypeslib.as_array((c_uint8 * 100).from_address(z)))
 
 #imageds_dll.free_array_buffer(ret_buffer)
-rows = c_int(5)
+rows = c_int(50)
 #rows = 50
 #cols = 50
-cols = c_int(20)
-wrap = MyWrapper(rows, cols, x, region, attr_array)
-buf = wrap.buffer
+cols = c_int(50)
+#wrap = MyWrapper(rows, cols, x, region, attr_array)
+#buf = wrap.buffer
 #for i in buf[0]:
 #	print (i)
 #print (buf[0])
-print (buf)
+#print (buf)
 #byte_arr = bytearray(string_at((ret_buffer[0]), size=50))
 #print (frombuffer(byte_arr, dtype=uint8))
 #print (ret_buffer[0])
